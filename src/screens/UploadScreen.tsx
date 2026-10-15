@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
-  SafeAreaView,
   StyleSheet,
   Text,
   View,
@@ -10,376 +9,614 @@ import {
   Alert,
   ActivityIndicator,
   TextInput,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import VectorIcon from 'react-native-vector-icons/Ionicons';
+const Ionicons = VectorIcon as any;
 import { supabase } from '../../supabase';
+import { colors, radius, spacing } from '../theme';
+import { formatearFecha } from '../utils'; //En vez de duplicar la función (en Upload y HomeScreen), la importamos desde utils.ts
+
+type TipoModal = 'domingo' | 'responsable' | 'cancion' | '';
+
+const TOTAL_CANCIONES = 5;
 
 export default function UploadScreen({ navigation }: any) {
-  const [responsableSeleccionado, setResponsableSeleccionado] = useState('');
-  const [domingoSeleccionado, setDomingoSeleccionado] = useState('');
-  const [cancionesSlots, setCancionesSlots] = useState(['', '', '', '', '']);
+  const [responsable, setResponsable] = useState('');
+  const [domingo, setDomingo] = useState('');
+  const [canciones, setCanciones] = useState<string[]>(Array(TOTAL_CANCIONES).fill(''));
 
   const [listaResponsables, setListaResponsables] = useState<string[]>([]);
   const [listaDomingos, setListaDomingos] = useState<string[]>([]);
-  const [repertorioCanciones, setRepertorioCanciones] = useState<string[]>([]);
+  const [repertorio, setRepertorio] = useState<string[]>([]);
   const [loadingData, setLoadingData] = useState(true);
+  const [guardando, setGuardando] = useState(false);
 
-  // Estados para los modales de selección y para el modal de nueva canción
   const [modalVisible, setModalVisible] = useState(false);
-  const [tipoModal, setTipoModal] = useState('');
+  const [tipoModal, setTipoModal] = useState<TipoModal>('');
   const [slotActivo, setSlotActivo] = useState<number | null>(null);
+  const [busqueda, setBusqueda] = useState('');
 
-  // Estados para el modal de agregar nueva canción
-  const [modalNuevaCancionVisible, setModalNuevaCancionVisible] = useState(false);
-  const [nuevaCancionTexto, setNuevaCancionTexto] = useState('');
+  const [modalNuevaVisible, setModalNuevaVisible] = useState(false);
+  const [nuevaTexto, setNuevaTexto] = useState('');
   const [guardandoCancion, setGuardandoCancion] = useState(false);
 
   useEffect(() => {
-    cargarDatosSupabase();
+    cargarDatos();
   }, []);
 
-  const cargarDatosSupabase = async () => {
+  const cargarCanciones = async () => {
+    const { data, error } = await supabase.from('Canciones').select('*').order('nombre', { ascending: true });
+    if (error) throw error;
+    setRepertorio((data || []).map((c: any) => c.nombre || c.Nombre || c.titulo || c.Titulo));
+  };
+
+  const cargarDatos = async () => {
     try {
       setLoadingData(true);
 
-      // 1. Obtener Responsables
       const { data: respData, error: respError } = await supabase.from('Responsables').select('*');
       if (respError) throw respError;
       setListaResponsables((respData || []).map((r: any) => r.nombre || r.Nombre));
 
-      // 2. Obtener Domingos
       const { data: domData, error: domError } = await supabase.from('Planificacion').select('*');
       if (domError) throw domError;
       setListaDomingos((domData || []).map((d: any) => d.fecha || d.Fecha));
 
-      // 3. Obtener Canciones ordenadas alfabéticamente por 'nombre'
-      const { data: cancData, error: cancError } = await supabase
-        .from('Canciones')
-        .select('*')
-        .order('nombre', { ascending: true });
-      if (cancError) throw cancError;
-
-      setRepertorioCanciones((cancData || []).map((c: any) => c.nombre || c.Nombre || c.titulo || c.Titulo));
-
+      await cargarCanciones();
     } catch (error: any) {
       console.error('Error cargando datos de Supabase:', error?.message);
-      Alert.alert('Error', 'No se pudieron cargar los datos de la base de datos.');
+      Alert.alert('No se pudieron cargar los datos', 'Revisá tu conexión e intentá de nuevo.');
     } finally {
       setLoadingData(false);
     }
   };
 
-  const abrirSelector = (tipo: string, slotIndex: number | null = null) => {
+  const abrirSelector = (tipo: TipoModal, slot: number | null = null) => {
     setTipoModal(tipo);
-    if (slotIndex !== null) setSlotActivo(slotIndex);
+    setSlotActivo(slot);
+    setBusqueda('');
     setModalVisible(true);
   };
 
+  const cerrarSelector = () => setModalVisible(false);
+
   const seleccionarItem = (valor: string) => {
     if (tipoModal === 'domingo') {
-      setDomingoSeleccionado(valor);
+      setDomingo(valor);
     } else if (tipoModal === 'responsable') {
-      setResponsableSeleccionado(valor);
+      setResponsable(valor);
     } else if (tipoModal === 'cancion' && slotActivo !== null) {
-      const nuevasCanciones = [...cancionesSlots];
-      nuevasCanciones[slotActivo] = valor;
-      setCancionesSlots(nuevasCanciones);
+      setCanciones((prev) => prev.map((c, i) => (i === slotActivo ? valor : c)));
     }
-    setModalVisible(false);
+    cerrarSelector();
   };
 
-  // Función para guardar una nueva canción en Supabase
+  const quitarCancion = (index: number) => {
+    setCanciones((prev) => prev.map((c, i) => (i === index ? '' : c)));
+  };
+
+  const itemsModal = useMemo(() => {
+    if (tipoModal === 'domingo') return listaDomingos;
+    if (tipoModal === 'responsable') return listaResponsables;
+    if (tipoModal === 'cancion') {
+      const usadas = canciones.filter((c, i) => c && i !== slotActivo);
+      return repertorio.filter((c) => !usadas.includes(c));
+    }
+    return [];
+  }, [tipoModal, listaDomingos, listaResponsables, repertorio, canciones, slotActivo]);
+
+  const itemsFiltrados = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    if (!q) return itemsModal;
+    return itemsModal.filter((i) => i?.toLowerCase().includes(q));
+  }, [itemsModal, busqueda]);
+
+  const valorActualModal =
+    tipoModal === 'domingo'
+      ? domingo
+      : tipoModal === 'responsable'
+      ? responsable
+      : slotActivo !== null
+      ? canciones[slotActivo]
+      : '';
+
+  const tituloModal =
+    tipoModal === 'domingo'
+      ? 'Elegí la fecha'
+      : tipoModal === 'responsable'
+      ? 'Elegí quién dirige'
+      : `Canción ${(slotActivo ?? 0) + 1} de ${TOTAL_CANCIONES}`;
+
   const guardarNuevaCancion = async () => {
-    if (!nuevaCancionTexto.trim()) {
-      Alert.alert('Campo vacío', 'Por favor ingresa el nombre de la canción.');
+    const nombre = nuevaTexto.trim();
+    if (!nombre) {
+      Alert.alert('Falta el nombre', 'Escribí el nombre de la canción.');
+      return;
+    }
+    if (repertorio.some((c) => c?.toLowerCase() === nombre.toLowerCase())) {
+      Alert.alert('Ya existe', 'Esa canción ya está en el repertorio.');
       return;
     }
 
     try {
       setGuardandoCancion(true);
-      // Asumiendo que tu columna en la tabla Canciones se llama 'nombre'
-      const { error } = await supabase.from('Canciones').insert([
-        { nombre: nuevaCancionTexto.trim() }
-      ]);
-
+      const { error } = await supabase.from('Canciones').insert([{ nombre }]);
       if (error) throw error;
 
-      Alert.alert('¡Éxito!', 'Canción agregada al repertorio.');
-      setNuevaCancionTexto('');
-      setModalNuevaCancionVisible(false);
-      
-      // Recargamos las canciones para que aparezca ordenada al instante
-      cargarDatosSupabase();
+      setNuevaTexto('');
+      setModalNuevaVisible(false);
+      await cargarCanciones();
     } catch (error: any) {
-      console.error('Error detallado de Supabase:', JSON.stringify(error, null, 2));
-      Alert.alert('Error', `No se pudo guardar: ${error?.message || 'Error desconocido'}`);
+      console.error('Error al guardar canción:', JSON.stringify(error, null, 2));
+      Alert.alert('No se pudo guardar', error?.message || 'Error desconocido');
     } finally {
       setGuardandoCancion(false);
     }
   };
 
   const validarYGuardar = async () => {
-    if (!domingoSeleccionado) {
-      Alert.alert('Falta fecha', 'Por favor selecciona la fecha del domingo.');
-      return;
-    }
-    if (!responsableSeleccionado) {
-      Alert.alert('Falta responsable', 'Por favor selecciona un responsable.');
-      return;
-    }
-    if (cancionesSlots.some((c) => c === '')) {
-      Alert.alert('Canciones incompletas', 'Debes seleccionar exactamente las 5 canciones.');
-      return;
+    if (!domingo) return Alert.alert('Falta la fecha', 'Elegí la fecha del domingo.');
+    if (!responsable) return Alert.alert('Falta el responsable', 'Elegí quién dirige.');
+    if (canciones.some((c) => c === '')) {
+      return Alert.alert('Canciones incompletas', `Tenés que elegir las ${TOTAL_CANCIONES} canciones.`);
     }
 
     try {
+      setGuardando(true);
+
+      // Validar si ya existe este domingo cargado
+      const { data: existente, error: errBusqueda } = await supabase
+        .from('Domingos')
+        .select('fecha')
+        .eq('fecha', domingo);
+
+      if (errBusqueda) throw errBusqueda;
+      if (existente && existente.length > 0) {
+        setGuardando(false);
+        Alert.alert('Domingo ya programado', 'Ya existe una alabanza guardada para esta fecha.');
+        return;
+      }
+
       const { error } = await supabase.from('Domingos').insert([
         {
-          fecha: domingoSeleccionado,
-          fecha_mostrada: domingoSeleccionado,
-          responsable: responsableSeleccionado,
-          canciones: cancionesSlots,
+          fecha: domingo,
+          fecha_mostrada: domingo,
+          responsable,
+          canciones,
         },
       ]);
-
       if (error) throw error;
 
-      Alert.alert('¡Éxito!', 'Alabanza guardada correctamente.', [
-        { text: 'OK', onPress: () => navigation.goBack() }
+      Alert.alert('Guardado', 'La alabanza se guardó correctamente.', [
+        { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } catch (error: any) {
       console.error('Error al guardar:', error?.message);
-      Alert.alert('Error', 'No se pudo guardar en la base de datos.');
+      Alert.alert('No se pudo guardar', 'Intentá de nuevo en unos segundos.');
+    } finally {
+      setGuardando(false);
     }
   };
 
+  const completas = canciones.filter(Boolean).length;
+
   if (loadingData) {
     return (
-      <SafeAreaView style={[styles.containerDark, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color="#2ed573" />
-        <Text style={{ color: '#ffffff', marginTop: 10 }}>Cargando listas desde Supabase...</Text>
+      <SafeAreaView style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color={colors.accent} />
+        <Text style={styles.loadingText}>Cargando listas…</Text>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.containerDark}>
-      <View style={styles.headerDark}>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Text style={styles.backButtonText}>⬅️</Text>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.iconButton}
+          onPress={() => navigation.goBack()}
+          hitSlop={8}
+          accessibilityLabel="Volver"
+        >
+          <Ionicons name="chevron-back" size={22} color={colors.text} />
         </TouchableOpacity>
-        <Text style={styles.appTitleDark}>Asignar Alabanzas</Text>
-        <View style={{ width: 40 }} />
+        <Text style={styles.headerTitle}>Nueva alabanza</Text>
+        <View style={{ width: 42 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.formContainerDark}>
-        <Text style={styles.mainHeading}>Cargar Nueva Alabanza</Text>
+      <ScrollView
+        contentContainerStyle={styles.form}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Fecha */}
+        <Text style={styles.label}>Fecha del domingo</Text>
+        <SelectField
+          icon="calendar-outline"
+          value={domingo ? formatearFecha(domingo) : ''}
+          placeholder="Elegir fecha"
+          onPress={() => abrirSelector('domingo')}
+        />
 
-        <Text style={styles.labelDark}>Fecha del Domingo:</Text>
-        <TouchableOpacity style={styles.inputBox} onPress={() => abrirSelector('domingo')}>
-          <Text style={[styles.inputText, !domingoSeleccionado && styles.placeholderText]}>
-            {domingoSeleccionado || 'Seleccionar fecha'}
-          </Text>
-        </TouchableOpacity>
+        {/* Responsable */}
+        <Text style={styles.label}>Dirige</Text>
+        <SelectField
+          icon="person-outline"
+          value={responsable}
+          placeholder="Elegir responsable"
+          onPress={() => abrirSelector('responsable')}
+        />
 
-        <Text style={styles.labelDark}>Responsable:</Text>
-        <TouchableOpacity style={styles.inputBox} onPress={() => abrirSelector('responsable')}>
-          <Text style={[styles.inputText, !responsableSeleccionado && styles.placeholderText]}>
-            {responsableSeleccionado || 'Seleccionar responsable'}
-          </Text>
-        </TouchableOpacity>
-
-        <View style={styles.songsHeaderRow}>
-          <Text style={styles.labelDark}>Elegir canciones (5):</Text>
-          <TouchableOpacity 
-            style={styles.addSongButton} 
-            onPress={() => setModalNuevaCancionVisible(true)}
+        {/* Canciones */}
+        <View style={styles.songsHeader}>
+          <View>
+            <Text style={[styles.label, { marginTop: 0, marginBottom: 2 }]}>Canciones</Text>
+            <Text style={styles.counter}>
+              {completas} de {TOTAL_CANCIONES} elegidas
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.ghostButton}
+            onPress={() => setModalNuevaVisible(true)}
+            activeOpacity={0.7}
           >
-            <Text style={styles.addSongButtonText}>+ Nueva Canción</Text>
+            <Ionicons name="add" size={18} color={colors.accent} />
+            <Text style={styles.ghostButtonText}>Nueva canción</Text>
           </TouchableOpacity>
         </View>
 
-        {cancionesSlots.map((cancionSlot, index) => (
+        {canciones.map((cancion, index) => (
           <View key={index} style={styles.slotRow}>
-            <Text style={styles.slotNumber}>{index + 1}.</Text>
-            <TouchableOpacity 
-              style={styles.inputBoxSlot} 
-              onPress={() => abrirSelector('cancion', index)}
-            >
-              <Text style={[styles.inputText, !cancionSlot && styles.placeholderText]}>
-                {cancionSlot || 'Seleccionar canción'}
-              </Text>
-            </TouchableOpacity>
+            <View style={[styles.slotBadge, !!cancion && styles.slotBadgeActive]}>
+              {cancion ? (
+                <Ionicons name="checkmark" size={14} color="#fff" />
+              ) : (
+                <Text style={styles.slotBadgeText}>{index + 1}</Text>
+              )}
+            </View>
+            <View style={{ flex: 1 }}>
+              <SelectField
+                value={cancion}
+                placeholder="Elegir canción"
+                onPress={() => abrirSelector('cancion', index)}
+                onClear={cancion ? () => quitarCancion(index) : undefined}
+                compact
+              />
+            </View>
           </View>
         ))}
-
-        <TouchableOpacity style={styles.saveButton} onPress={validarYGuardar}>
-          <Text style={styles.saveButtonText}>Guardar Alabanza</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.undoButton} onPress={() => navigation.goBack()}>
-          <Text style={styles.undoButtonText}>Deshacer</Text>
-        </TouchableOpacity>
       </ScrollView>
 
+      {/* Footer */}
+      <View style={styles.footer}>
+        <TouchableOpacity
+          style={[styles.saveButton, guardando && { opacity: 0.6 }]}
+          onPress={validarYGuardar}
+          disabled={guardando}
+          activeOpacity={0.85}
+        >
+          {guardando ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.saveButtonText}>Guardar alabanza</Text>
+          )}
+        </TouchableOpacity>
+      </View>
 
-      {/* Modal para seleccionar elementos (Domingo, Responsable, Canción) */}
-      <Modal visible={modalVisible} transparent={true} animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>
-              {tipoModal === 'domingo' && 'Seleccionar Domingo'}
-              {tipoModal === 'responsable' && 'Seleccionar Responsable'}
-              {tipoModal === 'cancion' && `Seleccionar Canción (${(slotActivo ?? 0) + 1}/5)`}
-            </Text>
+      {/* Modal Selector */}
+      <Modal visible={modalVisible} transparent animationType="slide" onRequestClose={cerrarSelector}>
+        <Pressable style={styles.overlay} onPress={cerrarSelector}>
+          <Pressable style={styles.sheet} onPress={() => {}}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>{tituloModal}</Text>
 
-            <ScrollView style={{ maxHeight: 300 }}>
-              {tipoModal === 'domingo' && listaDomingos.map((dom, idx) => (
-                <TouchableOpacity key={idx} style={styles.modalItem} onPress={() => seleccionarItem(dom)}>
-                  <Text style={styles.modalItemText}>{dom}</Text>
-                </TouchableOpacity>
-              ))}
+            {itemsModal.length > 6 && (
+              <View style={styles.searchBox}>
+                <Ionicons name="search-outline" size={18} color={colors.textMuted} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Buscar"
+                  placeholderTextColor={colors.textMuted}
+                  value={busqueda}
+                  onChangeText={setBusqueda}
+                  autoCorrect={false}
+                />
+              </View>
+            )}
 
-              {tipoModal === 'responsable' && listaResponsables.map((resp, idx) => (
-                <TouchableOpacity key={idx} style={styles.modalItem} onPress={() => seleccionarItem(resp)}>
-                  <Text style={styles.modalItemText}>{resp}</Text>
-                </TouchableOpacity>
-              ))}
-
-              {tipoModal === 'cancion' && repertorioCanciones.map((cancion, i) => (
-                <TouchableOpacity key={i} style={styles.modalItem} onPress={() => seleccionarItem(cancion)}>
-                  <Text style={styles.modalItemText}>{cancion}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-
-            <TouchableOpacity style={styles.modalCloseButton} onPress={() => setModalVisible(false)}>
-              <Text style={styles.modalCloseText}>Cancelar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+            <FlatList
+              data={itemsFiltrados}
+              keyExtractor={(item, i) => `${item}-${i}`}
+              style={{ maxHeight: 340 }}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => {
+                const activo = item === valorActualModal;
+                const textoMostrar = tipoModal === 'domingo' ? formatearFecha(item) : item;
+                return (
+                  <TouchableOpacity
+                    style={[styles.option, activo && styles.optionActive]}
+                    onPress={() => seleccionarItem(item)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.optionText, activo && { color: colors.accent, fontWeight: '600' }]}>
+                      {textoMostrar}
+                    </Text>
+                    {activo && <Ionicons name="checkmark" size={20} color={colors.accent} />}
+                  </TouchableOpacity>
+                );
+              }}
+              ListEmptyComponent={
+                <Text style={styles.emptyText}>
+                  {busqueda ? 'No hay resultados para tu búsqueda.' : 'No hay opciones disponibles.'}
+                </Text>
+              }
+            />
+          </Pressable>
+        </Pressable>
       </Modal>
 
+      {/* Modal Nueva Canción */}
+      <Modal
+        visible={modalNuevaVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setModalNuevaVisible(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.overlayCenter}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.dialog}>
+            <Text style={styles.dialogTitle}>Nueva canción</Text>
+            <Text style={styles.dialogHint}>Se agrega al repertorio para usarla en cualquier domingo.</Text>
 
-      {/* Modal para agregar una nueva canción al repertorio */}
-      <Modal visible={modalNuevaCancionVisible} transparent={true} animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Agregar Nueva Canción</Text>
-            
             <TextInput
-              style={styles.textInputModal}
+              style={styles.textInput}
               placeholder="Nombre de la canción"
-              placeholderTextColor="#6b96ce"
-              value={nuevaCancionTexto}
-              onChangeText={setNuevaCancionTexto}
-              autoFocus={true}
+              placeholderTextColor={colors.textMuted}
+              value={nuevaTexto}
+              onChangeText={setNuevaTexto}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={guardarNuevaCancion}
             />
 
-            <TouchableOpacity 
-              style={[styles.saveButton, { marginTop: 16 }]} 
-              onPress={guardarNuevaCancion}
-              disabled={guardandoCancion}
-            >
-              {guardandoCancion ? (
-                <ActivityIndicator color="#ffffff" />
-              ) : (
-                <Text style={styles.saveButtonText}>Guardar Canción</Text>
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[styles.modalCloseButton, { marginTop: 10 }]} 
-              onPress={() => setModalNuevaCancionVisible(false)}
-            >
-              <Text style={styles.modalCloseText}>Cancelar</Text>
-            </TouchableOpacity>
+            <View style={styles.dialogActions}>
+              <TouchableOpacity
+                style={styles.secondaryButton}
+                onPress={() => {
+                  setNuevaTexto('');
+                  setModalNuevaVisible(false);
+                }}
+              >
+                <Text style={styles.secondaryButtonText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.primaryButtonSmall, guardandoCancion && { opacity: 0.6 }]}
+                onPress={guardarNuevaCancion}
+                disabled={guardandoCancion}
+              >
+                {guardandoCancion ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.primaryButtonSmallText}>Agregar</Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
 }
 
+function SelectField({
+  value,
+  placeholder,
+  onPress,
+  onClear,
+  icon,
+  compact,
+}: {
+  value: string;
+  placeholder: string;
+  onPress: () => void;
+  onClear?: () => void;
+  icon?: keyof typeof Ionicons.glyphMap;
+  compact?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.field, compact && styles.fieldCompact]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      {icon && <Ionicons name={icon} size={18} color={colors.textMuted} style={{ marginRight: 10 }} />}
+      <Text style={[styles.fieldText, !value && { color: colors.textMuted }]} numberOfLines={1}>
+        {value || placeholder}
+      </Text>
+      {onClear ? (
+        <TouchableOpacity onPress={onClear} hitSlop={10} accessibilityLabel="Quitar canción">
+          <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+        </TouchableOpacity>
+      ) : (
+        <Ionicons name="chevron-down" size={18} color={colors.textMuted} />
+      )}
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
-  containerDark: { flex: 1, backgroundColor: '#21164c' },
-  headerDark: {
+  container: { flex: 1, backgroundColor: colors.bg },
+  centered: { justifyContent: 'center', alignItems: 'center' },
+  loadingText: { color: colors.textMuted, marginTop: spacing.sm, fontSize: 14 },
+
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 4,
+  },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+  iconButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  form: { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.lg },
+  label: { fontSize: 14, fontWeight: '600', color: colors.textMuted, marginTop: spacing.md, marginBottom: 8 },
+  songsHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginTop: spacing.lg,
+    marginBottom: spacing.sm + 4,
+  },
+  counter: { fontSize: 13, color: colors.textMuted },
+
+  field: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    paddingTop: 38,
-    backgroundColor: '#7a1367',
-  },
-
-
-   backButton: { paddingVertical: 4, paddingHorizontal: 8, backgroundColor: '#570e49', borderRadius: 6, borderWidth: 1, borderColor: '#7a1367' },
-  backButtonText: { fontSize: 16, color: '#ffffff', fontWeight: 'bold' },
-  appTitleDark: { fontSize: 20, fontWeight: 'bold', color: '#ffffff' },//color y tamaño de "Asignar Alabanzas"
-  formContainerDark: { padding: 20, paddingBottom: 40 },
-  mainHeading: { fontSize: 22, fontWeight: 'bold', color: '#0dae50', marginBottom: 20 },//color y tamaño de "Cargar Nueva Alabanza"
-  labelDark: { fontSize: 16, fontWeight: '600', color: '#22a0c0', marginBottom: 8, marginTop: 10 },//color y tamaño de los titulos "Fecha del Domingo", "Responsable" y "Elegir canciones"
-  songsHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, marginBottom: 8 },
-  
-  
-  addSongButton: { backgroundColor: '#0984e3', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6 },//color de fondo del boton "+ Nueva Canción"
-  addSongButtonText: { color: '#ffffff', fontSize: 15, fontWeight: 'bold' },//color y tamaño del texto del boton "+ Nueva Canción"
- 
-  inputBox: { backgroundColor: '#e5e7f1', padding: 14, borderRadius: 8, marginBottom: 14 },//color de fondo de los input (responsable y fecha)
-
-  inputText: { fontSize: 16, color: '#1261d0', fontWeight: '500' },//color del texto de los input cuando hay valor
-  
-  placeholderText: { color: '#0b0c0c' },//color del texto de los input cuando no hay valor 
-  slotRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  
-  slotNumber: { fontSize: 18, fontWeight: 'bold', color: '#f5f2f2', width: 28 },//color de los numeros
-  inputBoxSlot: { flex: 1, backgroundColor: '#f6f7fb', padding: 14, borderRadius: 8 },//color de fondo de los input de las canciones
- 
- 
-  saveButton: { //Boton de "Guardar Alabanza"
-    backgroundColor: '#039814',//color de fondo de "Guardar Alabanza"
-    padding: 16,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 24,
-    elevation: 4,
-  },
-  saveButtonText: { fontSize: 18, fontWeight: 'bold', color: '#ffffff' },//color de "Guardar Alabanza"
-  
-  
-  undoButton: { //Boton de "Deshacer / Volver"
-    backgroundColor: 'transparent',
-    borderWidth: 1.5,
-    borderColor: '#f72133',
-    padding: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 12,
-  },
-  undoButtonText: { fontSize: 16, fontWeight: 'bold', color: '#ff4757' },
-  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' }, 
-  modalContent: {
-    backgroundColor: '#21164c', //color de fondo de las pestanas de seleccion de responsable, domingo y canciones
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    maxHeight: '70%',
-  },
-
-
-  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#f5f5f6', marginBottom: 16, textAlign: 'center' },//color y tamaño de los titulos de las pestanas "Seleccionar Domingo", "Seleccionar Responsable", "Seleccionar Canción" y "Agregar Nueva Canción"
-  modalItem: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#f1f2f6' },//color de fondo de los items del modal de seleccion de responsable, domingo y canciones
-  modalItemText: { fontSize: 16, color: '#eef0f3', textAlign: 'center' },//color del texto de los items de la pestana de seleccion de responsable, domingo y canciones
-  
-  modalCloseButton: { marginTop: 16, padding: 12, backgroundColor: '#ff4757', borderRadius: 8, alignItems: 'center' },
-  modalCloseText: { color: '#ffffff', fontWeight: 'bold', fontSize: 16 }, //color del texto del boton "Cancelar" del modal
-  textInputModal: {
-    backgroundColor: '#f0eff3', //color de fondo del input de nueva canción
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#dcdde1', //color del borde del input de nueva canción
-    borderRadius: 8,
-    padding: 14,
-    fontSize: 16,
-    color: '#2265c4', //color del texto del input de nueva canción
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
+    paddingVertical: 15,
   },
+  fieldCompact: { paddingVertical: 13 },
+  fieldText: { flex: 1, fontSize: 16, color: colors.text },
+
+  slotRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10 },
+  slotBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  slotBadgeActive: { backgroundColor: colors.accent },
+  slotBadgeText: { fontSize: 13, fontWeight: '700', color: colors.textMuted },
+
+  ghostButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: radius.sm + 4,
+    backgroundColor: colors.accentSoft,
+  },
+  ghostButtonText: { fontSize: 14, fontWeight: '600', color: colors.accent },
+
+  footer: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm + 4,
+    paddingBottom: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.bg,
+  },
+  saveButton: {
+    backgroundColor: colors.accent,
+    borderRadius: radius.md,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  saveButtonText: { fontSize: 16, fontWeight: '700', color: '#fff' },
+
+  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
+  sheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.lg + 4,
+    borderTopRightRadius: radius.lg + 4,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.lg,
+    paddingTop: spacing.sm,
+    maxHeight: '80%',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.border,
+    marginBottom: spacing.md,
+  },
+  sheetTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: spacing.md },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    marginBottom: spacing.sm,
+  },
+  searchInput: { flex: 1, paddingVertical: 12, fontSize: 15, color: colors.text },
+  option: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: radius.sm + 4,
+  },
+  optionActive: { backgroundColor: colors.accentSoft },
+  optionText: { fontSize: 16, color: colors.text, flex: 1, paddingRight: 8 },
+  emptyText: { textAlign: 'center', color: colors.textMuted, paddingVertical: spacing.lg },
+
+  overlayCenter: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: spacing.lg,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+  },
+  dialog: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg - 4,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  dialogTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+  dialogHint: { fontSize: 13, color: colors.textMuted, marginTop: 4, marginBottom: spacing.md },
+  textInput: {
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: colors.text,
+  },
+  dialogActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: spacing.md },
+  secondaryButton: { paddingVertical: 12, paddingHorizontal: 16, borderRadius: radius.sm + 4 },
+  secondaryButtonText: { fontSize: 15, fontWeight: '600', color: colors.textMuted },
+  primaryButtonSmall: {
+    backgroundColor: colors.accent,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: radius.sm + 4,
+    minWidth: 96,
+    alignItems: 'center',
+  },
+  primaryButtonSmallText: { fontSize: 15, fontWeight: '700', color: '#fff' },
 });

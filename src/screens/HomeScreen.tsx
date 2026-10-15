@@ -1,6 +1,5 @@
 import React, { useState, useCallback } from 'react';
 import {
-  SafeAreaView,
   StyleSheet,
   Text,
   View,
@@ -10,12 +9,46 @@ import {
   Alert,
   Image,
 } from 'react-native';
-import { supabase } from '../../supabase';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import VectorIcon from 'react-native-vector-icons/Ionicons';
+const Ionicons = VectorIcon as any;
 import { useFocusEffect } from '@react-navigation/native';
+import { supabase } from '../../supabase';
+import { colors, radius, spacing } from '../theme';
+import { formatearFecha } from '../utils'; // En vez de duplicar la misma función, importamos la versión de utils.ts
+
+// Función para determinar si una fecha es la más cercana a partir de hoy (próximo domingo)
+function esProximoDomingo(fechaStr: string, lista: any[]): boolean {
+  try {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    const fechasValidas = lista
+      .map((item) => {
+        const fStr = item.fecha || item.Fecha;
+        const partes = fStr?.split('-');
+        if (partes?.length === 3) {
+          const d = new Date(Number(partes[0]), Number(partes[1]) - 1, Number(partes[2]));
+          return { original: fStr, date: d };
+        }
+        return null;
+      })
+      .filter((x): x is { original: string; date: Date } => x !== null && x.date >= hoy);
+
+    if (fechasValidas.length === 0) return false;
+
+    // Ordenar por la fecha más cercana futura
+    fechasValidas.sort((a, b) => a.date.getTime() - b.date.getTime());
+    return fechasValidas[0].original === fechaStr;
+  } catch {
+    return false;
+  }
+}
 
 export default function HomeScreen({ navigation }: any) {
   const [planificaciones, setPlanificaciones] = useState<any[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -23,213 +56,238 @@ export default function HomeScreen({ navigation }: any) {
     }, [])
   );
 
-  const cargarDomingos = async () => {
+  const cargarDomingos = async (esRefresh = false) => {
     try {
-      setLoading(true);
+      if (esRefresh) setRefreshing(true);
+      else setLoading(true);
+
       const { data, error } = await supabase.from('Domingos').select('*');
       if (error) throw error;
       setPlanificaciones(data || []);
     } catch (err: any) {
       console.error('Error cargando domingos:', err?.message || err);
-      Alert.alert('Error', 'No se pudieron cargar los registros de Supabase.');
+      Alert.alert('No se pudieron cargar los domingos', 'Revisá tu conexión e intentá de nuevo.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  const eliminarDomingo = async (idOFecha: any) => {
-    Alert.alert(
-      'Eliminar planificación',
-      '¿Estás seguro de que querés borrar este registro?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const { error } = await supabase.from('Domingos').delete().eq('fecha', idOFecha);
-              if (error) throw error;
-              cargarDomingos();
-            } catch (err) {
-              Alert.alert('Error', 'No se pudo eliminar el registro.');
-            }
-          },
+  const eliminarDomingo = (item: any) => {
+    const fecha = item.fecha || item.Fecha;
+
+    Alert.alert('Eliminar domingo', `¿Querés borrar el domingo ${formatearFecha(fecha)}? No se puede deshacer.`, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const { error } = await supabase.from('Domingos').delete().eq('fecha', fecha);
+            if (error) throw error;
+            cargarDomingos();
+          } catch (err) {
+            Alert.alert('No se pudo eliminar', 'Intentá de nuevo en unos segundos.');
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* HEADER MEJORADO CON LOGO CENTRADO */}
+    <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Header */}
       <View style={styles.header}>
-        
-        {/* Fila superior: Botón Calendario y Botón Agregar */}
-        <View style={styles.headerButtonsRow}>
-          <TouchableOpacity 
-            style={styles.headerButton} 
-            onPress={() => navigation.navigate('Calendar')}
-          >
-            <Text style={styles.headerButtonText}>📅 Calendario</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={styles.headerButtonPrimary} 
-            onPress={() => navigation.navigate('Upload')}
-          >
-            <Text style={styles.headerButtonPrimaryText}>+ Agregar</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Contenedor del logo y título alineados al centro */}
-        <View style={styles.logoAndTitleContainer}>
-          <View style={styles.logoWrapper}>
-            <Image 
-              source={require('../../assets/logo.png')} 
-              style={styles.logoImage} 
-              resizeMode="contain"
-            />
+        <View style={styles.brand}>
+          <Image source={require('../../assets/logo.png')} style={styles.logo} resizeMode="cover" />
+          <View>
+            <Text style={styles.title}>Alabanzas IEG</Text>
+            <Text style={styles.subtitle}>Domingos programados</Text>
           </View>
-          
-          <Text style={styles.appTitle}>Alabanzas IEG</Text>
         </View>
-        
+
+        <TouchableOpacity
+          style={styles.iconButton}
+          onPress={() => navigation.navigate('Calendar')}
+          accessibilityLabel="Abrir calendario"
+        >
+          <Ionicons name="calendar-outline" size={22} color={colors.text} />
+        </TouchableOpacity>
       </View>
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator size="large" color="#0984e3" />
-          <Text style={{ marginTop: 10, color: '#718093' }}>Cargando datos...</Text>
+          <ActivityIndicator size="large" color={colors.accent} />
         </View>
       ) : (
         <FlatList
           data={planificaciones}
-          keyExtractor={(item: any, index: number) => item.id ? item.id.toString() : index.toString()}
-          renderItem={({ item }) => (
-            <View style={styles.card}>
-              <View style={styles.cardHeader}>
-                <View>
-                  <Text style={styles.cardDate}>{item.fecha || item.Fecha}</Text>
-                  <Text style={styles.cardResponsible}>
-                    Dirige: <Text style={styles.boldText}>{item.responsable || item.Responsable}</Text>
-                  </Text>
+          keyExtractor={(item: any, index: number) => (item.id != null ? item.id.toString() : index.toString())}
+          contentContainerStyle={styles.list}
+          showsVerticalScrollIndicator={false}
+          refreshing={refreshing}
+          onRefresh={() => cargarDomingos(true)}
+          renderItem={({ item }) => {
+            const canciones = item.canciones || item.Canciones;
+            const fechaRaw = item.fecha || item.Fecha;
+            const esProximo = esProximoDomingo(fechaRaw, planificaciones);
+
+            return (
+              <View style={[styles.card, esProximo && styles.cardProximo]}>
+                {esProximo && (
+                  <View style={styles.badgeProximo}>
+                    <Text style={styles.badgeProximoText}>Próximo domingo</Text>
+                  </View>
+                )}
+                <View style={styles.cardHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cardDate}>{formatearFecha(fechaRaw)}</Text>
+                    <View style={styles.row}>
+                      <Ionicons name="person-outline" size={14} color={colors.textMuted} />
+                      <Text style={styles.cardResponsible}>{item.responsable || item.Responsable}</Text>
+                    </View>
+                  </View>
+
+                  <TouchableOpacity
+                    onPress={() => eliminarDomingo(item)}
+                    hitSlop={10}
+                    accessibilityLabel="Eliminar domingo"
+                  >
+                    <Ionicons name="trash-outline" size={20} color={colors.danger} />
+                  </TouchableOpacity>
                 </View>
-                
-                <TouchableOpacity onPress={() => eliminarDomingo(item.fecha || item.Fecha)} style={styles.deleteButton}>
-                  <Text style={styles.deleteButtonText}>🗑️</Text>
-                </TouchableOpacity>
+
+                {Array.isArray(canciones) && canciones.length > 0 && (
+                  <View style={styles.songs}>
+                    {canciones.map((cancion: string, index: number) => (
+                      <View key={index} style={styles.songRow}>
+                        <Text style={styles.songNumber}>{index + 1}</Text>
+                        <Text style={styles.songName}>{cancion}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
               </View>
-
-              <View style={styles.divider} />
-
-              <Text style={styles.songsTitle}>Canciones:</Text>
-              {Array.isArray(item.canciones || item.Canciones) && 
-                (item.canciones || item.Canciones).map((cancion: string, index: number) => (
-                  <Text key={index} style={styles.songItem}>
-                    {index + 1}. {cancion}
-                  </Text>
-                ))
-              }
-            </View>
-          )}
+            );
+          }}
           ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>No hay domingos programados todavía.</Text>
+            <View style={styles.empty}>
+              <Ionicons name="musical-notes-outline" size={48} color={colors.textMuted} />
+              <Text style={styles.emptyTitle}>Todavía no hay domingos</Text>
+              <Text style={styles.emptyText}>Tocá el botón + para cargar el primero.</Text>
             </View>
           }
-          contentContainerStyle={styles.listContainer}
         />
       )}
+
+      {/* Botón flotante */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => navigation.navigate('Upload')}
+        activeOpacity={0.85}
+        accessibilityLabel="Agregar domingo"
+      >
+        <Ionicons name="add" size={28} color="#fff" />
+      </TouchableOpacity>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#21164c' },//color de fondo de la pantalla
+  container: { flex: 1, backgroundColor: colors.bg },
+
   header: {
-    backgroundColor: '#7a1367',//color de fondo del header
-    paddingTop: 45, //ajusta el padding superior del header para que el logo y título estén más cerca del borde superior
-    paddingBottom: 1, //ajusta el padding inferior del header para que los botones estén más cerca del borde inferior
-    paddingHorizontal: 15, //ajusta el padding horizontal del header para que los botones estén más cerca de los bordes
-    paddingVertical: 1, // Ajusta el padding vertical para que el logo y título estén más cerca del borde superior
-    borderBottomWidth: 1, //grosor del borde inferior del header
-    borderBottomColor: '#dcdde1',
-    elevation: 4, //agrega sombra al header
-  },
-  headerButtonsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    width: '100%',
-    marginTop: 10, //posiciona los botones (mas chico, menos espacio desde arriba)
-    zIndex: 1, // Asegura que los botones estén por encima del logo
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
   },
-  headerButton: {
-    paddingVertical: 7, //tamaño vertical de boton Calendario
-    paddingHorizontal: 10, //tamaño horizontal de boton Calendario
-    backgroundColor: '#f5f6fa',
-    borderRadius: 5, //curvatura de los bordes del boton Calendario
-    borderWidth: 1, //grosor del borde del boton Calendario
-    borderColor: '#dcdde1',
-  },
-  headerButtonText: { fontSize: 14, color: '#0f0f10', fontWeight: '600' }, //color y tamaño del texto del boton Calendario
-  headerButtonPrimary: {
-    paddingVertical: 7, //tamaño vertical de boton Agregar
-    paddingHorizontal: 10, //tamaño horizontal de boton Agregar
-    backgroundColor: '#1567a7',
-    borderRadius: 5,//curvatura de los bordes del boton Agregar
-  },
-  headerButtonPrimaryText: { fontSize: 14, color: '#ffffff', fontWeight: 'bold' }, //color y tamaño del texto del boton Agregar
-  
-  logoAndTitleContainer: {
-    position: 'relative',
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  logo: { width: 46, height: 46, borderRadius: 23, borderWidth: 1, borderColor: colors.border },
+  title: { fontSize: 22, fontWeight: '700', color: colors.text },
+  subtitle: { fontSize: 13, color: colors.textMuted, marginTop: 1 },
+  iconButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
     alignItems: 'center',
-    marginTop: -33, // Ajusta la posición vertical del logo y título
+    justifyContent: 'center',
   },
-  logoWrapper: {
-    position: 'absolute',
-    left: 0, // Alinea el logo a la izquierda
-    right: 0, // Alinea el logo a la derecha
-    alignItems: 'center', // Centra el logo horizontalmente
-    top: 0, // Ajusta la posición vertical del logo con respecto a AlabanzasIEG (mas grande mas cerca)
-  },
-  logoImage: {
-    width: 65, // Ajusta el tamaño del logo
-    height: 65, // Ajusta el tamaño del logo
-    borderRadius: 32.5, // Hace que el logo sea circular
-    borderWidth: 2, //grosor del borde del logo
-    borderColor: '#e7ebef',
-  },
-  appTitle: { 
-    fontSize: 18, 
-    fontWeight: 'bold', 
-    color: '#dce7f3', //color del texto AlabanzasIEG
-    textAlign: 'center',
-    marginTop: 60,// Ajusta la posición vertical del título con respecto al logo (mas grande mas cerca)
-    textShadowColor: 'rgba(0, 0, 0, 0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
-  },
-  
-  listContainer: { padding: 16 },
+
+  list: { padding: spacing.md, paddingBottom: 110 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+
   card: {
-    backgroundColor: '#82a4ed', //color de fondo de las cards
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    elevation: 3,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  cardDate: { fontSize: 16, fontWeight: 'bold', color: '#080909' },//color de la fecha
-  cardResponsible: { fontSize: 14, color: '#0f0f10', marginTop: 4 }, //color de "Dirige"
-  boldText: { fontWeight: 'bold', color: '#eeecec' }, //color de los nombres de los responsables 
-  deleteButton: { padding: 6 },
-  deleteButtonText: { backgroundColor: '#f0efef', fontSize: 18 }, //color del boton de eliminar
-  divider: { height: 1, backgroundColor: '#f1f2f6', marginVertical: 12 },
-  songsTitle: { fontSize: 16, fontWeight: 'bold', color: '#072f64', marginBottom: 6, textTransform: 'uppercase' }, //color de "Canciones elegidas"
-  songItem: { fontSize: 16, color: '#f6f3f3', paddingVertical: 2 }, //color de las canciones elegidas y numero
-  emptyContainer: { marginTop: 60, alignItems: 'center' },
-  emptyText: { fontSize: 20, color: '#b72411' }, //color del texto "No hay domingos programados todavía."
+  cardProximo: {
+    borderColor: colors.accent,
+    borderWidth: 1.5,
+  },
+  badgeProximo: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.accentSoft,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.sm,
+    marginBottom: 8,
+  },
+  badgeProximoText: { fontSize: 11, fontWeight: '700', color: colors.accent, textTransform: 'uppercase' },
+
+  cardHeader: { flexDirection: 'row', alignItems: 'flex-start' },
+  cardDate: { fontSize: 18, fontWeight: '700', color: colors.text },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  cardResponsible: { fontSize: 14, color: colors.textMuted },
+
+  songs: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: 10,
+  },
+  songRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  songNumber: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.accentSoft,
+    color: colors.accent,
+    textAlign: 'center',
+    lineHeight: 24,
+    fontSize: 12,
+    fontWeight: '700',
+    overflow: 'hidden',
+  },
+  songName: { flex: 1, fontSize: 15, color: colors.text },
+
+  empty: { alignItems: 'center', marginTop: 80, gap: 8, paddingHorizontal: spacing.lg },
+  emptyTitle: { fontSize: 18, fontWeight: '600', color: colors.text, marginTop: 8 },
+  emptyText: { fontSize: 14, color: colors.textMuted, textAlign: 'center' },
+
+  fab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 30,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.accent,
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
 });
